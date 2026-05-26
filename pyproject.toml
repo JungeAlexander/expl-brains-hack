@@ -1,0 +1,31 @@
+[project]
+name = "expl-brains-hack"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.103.0",
+    "boto3>=1.43.10",
+    "dash>=4.1.0",
+    "fastapi>=0.136.1",
+    "h5py>=3.16.0",
+    "ipywidgets>=8.1.8",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.9",
+    "networkx>=3.6.1",
+    "numpy>=2.4.6",
+    "openai>=2.37.0",
+    "pandas>=3.0.3",
+    "pillow>=12.2.0",
+    "plotly>=6.7.0",
+    "requests>=2.34.2",
+    "s3fs>=0.4.2",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
+    "seaborn>=0.13.2",
+    "simpleitk>=2.5.5",
+    "streamlit>=1.57.0",
+    "streamlit-plotly-events>=0.0.6",
+    "tqdm>=4.67.3",
+    "umap-learn>=0.5.12",
+    "uvicorn>=0.47.0",
+]

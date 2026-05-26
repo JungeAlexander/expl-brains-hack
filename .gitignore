@@ -1,0 +1,23 @@
+# credentials — never commit
+.streamlit/secrets.toml
+*.env
+.env
+# Note: bucket_access/config.py holds Hetzner hackathon creds that are shipped
+# with the upstream hackathon repo and shared with all participants. Committed
+# here so teammates can clone-and-run.
+
+# uv / virtualenv
+.venv/
+__pycache__/
+*.py[cod]
+
+# downloaded data — fetched on first run
+data_cache/
+*.h5
+*.nii
+*.nii.gz
+
+# editor
+.vscode/
+.idea/
+.DS_Store
