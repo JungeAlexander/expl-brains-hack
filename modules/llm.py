@@ -75,7 +75,7 @@ def narrate_landing(stats_records: tuple) -> str:
             model=MODEL,
             max_tokens=300,
             system=LANDING_SYSTEM,
-            messages=[{"role": "user", "content": json.dumps(payload)}],
+            messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
         )
         return _join_text(resp.content)
     except Exception as e:
@@ -111,11 +111,14 @@ def narrate_region(
     siblings: list[pd.Series] | None = None,
 ) -> str:
     sibs = [_row_to_dict(s) for s in (siblings or [])]
+    hlevel = row.get("hierarchy_level", None)
+    if hasattr(hlevel, "item"):
+        hlevel = hlevel.item()
     payload = {
         "region": {
             "name": row.get("region_name", ""),
             "acronym": row.get("acronym", ""),
-            "hierarchy_level": row.get("hierarchy_level", None),
+            "hierarchy_level": hlevel,
         },
         "stats": _row_to_dict(row),
         "siblings": sibs,
@@ -127,7 +130,7 @@ def narrate_region(
             model=MODEL,
             max_tokens=500,
             system=REGION_SYSTEM,
-            messages=[{"role": "user", "content": json.dumps(payload)}],
+            messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
         )
         return _join_text(resp.content)
     except Exception as e:

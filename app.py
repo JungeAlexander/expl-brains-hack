@@ -52,6 +52,7 @@ ss.setdefault("chat_history", [])
 ss.setdefault("chat_display", [])  # list of {role, text} for UI
 ss.setdefault("tour_idx", 0)
 ss.setdefault("tour_active", False)
+ss.setdefault("evidence_for", None)  # acronym the user requested an evidence summary for
 
 
 def _label_id_for(acronym: str) -> int | None:
@@ -272,26 +273,40 @@ if acronym is not None:
             except Exception as e:
                 st.warning(f"Triptych render failed: {e}")
 
-        # Literature + narrative
-        col_lit, col_nar = st.columns([1.0, 1.0], gap="large")
+        # On-demand evidence: button → Amass citations first, then Claude summary
+        st.markdown("### 🔬 Literature evidence")
+        st.caption(
+            "Pull papers from Amass BiomedCore that link this region to Semaglutide / "
+            "GLP-1, then summarize what they say."
+        )
+        if st.button(
+            f"Find evidence for {row.get('region_name', acronym)}",
+            type="primary",
+            key=f"evidence_btn_{acronym}",
+        ):
+            ss["evidence_for"] = acronym
 
-        with st.spinner("Searching Amass literature…"):
-            try:
-                lit = amass.search_region_literature(
-                    row.get("region_name", acronym),
-                    drug="semaglutide",
-                    k=5,
-                )
-            except Exception as e:
-                lit = {"papers": [], "query_used": "", "broadened": False}
-                st.warning(f"Amass error: {e}")
+        if ss.get("evidence_for") == acronym:
+            with st.spinner("Searching Amass literature…"):
+                try:
+                    lit = amass.search_region_literature(
+                        row.get("region_name", acronym),
+                        drug="semaglutide",
+                        k=5,
+                    )
+                except Exception as e:
+                    lit = {"papers": [], "query_used": "", "broadened": False}
+                    st.warning(f"Amass error: {e}")
 
-        papers = lit.get("papers", [])
+            papers = lit.get("papers", [])
 
-        with col_lit:
-            st.subheader("Literature (Amass · BiomedCore)")
+            # 1) Citations FIRST — always shown above the summary.
+            st.markdown("#### Citations (Amass · BiomedCore)")
             if lit.get("broadened"):
                 st.info(f"Broadened to: `{lit.get('query_used')}`")
+            elif lit.get("query_used"):
+                st.caption(f"Query: `{lit.get('query_used')}`")
+
             if not papers:
                 st.caption("No papers returned for this region.")
             else:
@@ -339,9 +354,9 @@ if acronym is not None:
                                 ] if s)
                             )
 
-        with col_nar:
-            st.subheader("Claude — what this means")
-            with st.spinner("Synthesizing…"):
+            # 2) Evidence summary AFTER the citations — grounded in those same papers.
+            st.markdown("#### Evidence summary")
+            with st.spinner("Synthesizing evidence from the citations above…"):
                 try:
                     narrative = llm.narrate_region(row, papers, _sibling_rows(row))
                 except Exception as e:
