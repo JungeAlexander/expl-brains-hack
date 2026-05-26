@@ -6,8 +6,6 @@ Run:
 
 from __future__ import annotations
 
-import json
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -15,13 +13,7 @@ import streamlit as st
 from modules import amass, llm
 from modules.data import load_all
 from modules.nifti import render_triptych
-from modules.viz import strip_figure, tour_bar_figure, volcano_figure
-
-try:
-    from streamlit_plotly_events import plotly_events
-    HAS_PLOTLY_EVENTS = True
-except ImportError:
-    HAS_PLOTLY_EVENTS = False
+from modules.viz import strip_figure, tour_bar_figure
 
 
 st.set_page_config(
@@ -111,27 +103,6 @@ def _top_tour_regions(n: int = 5) -> list[str]:
 # ----------------------------------------------------------------------------
 
 with st.sidebar:
-    st.header("Filters")
-
-    max_p = st.slider(
-        "Max corrected p-value",
-        min_value=0.001, max_value=0.20, value=0.05, step=0.005, format="%.3f",
-    )
-    min_abs_lfc = st.slider(
-        "Min |log2 fold change|",
-        min_value=0.0, max_value=3.0, value=0.0, step=0.05,
-    )
-
-    hierarchy_levels = sorted(stats["hierarchy_level"].dropna().unique().tolist()) if "hierarchy_level" in stats.columns else []
-    chosen_levels = st.multiselect(
-        "Atlas hierarchy levels",
-        hierarchy_levels,
-        default=hierarchy_levels,
-    ) if hierarchy_levels else []
-
-    only_sig = st.checkbox("Only corrected-significant regions", value=False)
-
-    st.divider()
     st.caption("Groups")
     st.markdown("🔵 **G001 — Vehicle**\n\n🔴 **G002 — Semaglutide**")
 
@@ -162,11 +133,7 @@ with st.sidebar:
 # ----------------------------------------------------------------------------
 
 view = stats.copy()
-view = view.dropna(subset=["log2_fold_change", "p_corrected"])
-if chosen_levels and "hierarchy_level" in view.columns:
-    view = view[view["hierarchy_level"].isin(chosen_levels)]
-if only_sig and "significant_corrected" in view.columns:
-    view = view[view["significant_corrected"].fillna(False).astype(bool)]
+view = view.dropna(subset=["log2_fold_change", "p_value"])
 
 
 # ----------------------------------------------------------------------------
@@ -186,55 +153,79 @@ with st.container(border=True):
 
 
 # ----------------------------------------------------------------------------
-# Main two-column layout: volcano (left), drill-down (right)
+# Main two-column layout: data viewer (left), drill-down (right)
 # ----------------------------------------------------------------------------
 
-col_left, col_right = st.columns([1.1, 1.0], gap="large")
+col_left, col_right = st.columns([1.3, 1.0], gap="large")
 
 with col_left:
-    st.subheader("Volcano — click a dot to explore")
-    fig = volcano_figure(view, max_p=max_p, min_abs_lfc=min_abs_lfc)
+    st.subheader("Data viewer — click a row to explore")
 
-    if HAS_PLOTLY_EVENTS:
-        events = plotly_events(
-            fig,
-            click_event=True,
-            hover_event=False,
-            select_event=False,
-            override_height=540,
-            key="volcano",
-        )
-        if events:
-            ev = events[0]
-            # customdata in plotly is index-aligned. Recover by matching x+y.
-            try:
-                x = ev.get("x")
-                y = ev.get("y")
-                near = view.assign(
-                    _neglog10=-np.log10(view["p_corrected"].clip(lower=1e-300))
-                )
-                near = near.assign(_d=(near["log2_fold_change"] - x).abs() + (near["_neglog10"] - y).abs())
-                ss["selected_acronym"] = near.sort_values("_d").iloc[0]["acronym"]
-            except Exception:
-                pass
-    else:
-        st.plotly_chart(fig, use_container_width=True)
-        st.warning("`streamlit-plotly-events` not installed — click-to-drill disabled. "
-                   "`pip install streamlit-plotly-events` for the full experience.")
+    f1, f2, f3, f4 = st.columns([1.4, 1.0, 1.0, 1.0])
+    search = f1.text_input("Search (acronym or name)", value="", key="dv_search")
+    min_abs_lfc = f2.number_input("Min |log2 FC|", min_value=0.0, max_value=5.0, value=0.0, step=0.1, key="dv_min_lfc")
+    max_p = f3.number_input("Max p (uncorrected)", min_value=0.0, max_value=1.0, value=1.0, step=0.01, format="%.3f", key="dv_max_p")
+    direction = f4.selectbox("Direction", ["either", "up", "down"], index=0, key="dv_direction")
 
-    # Manual region picker as a fallback / convenience.
-    picker_options = view.sort_values("p_corrected")["acronym"].tolist()
-    if picker_options:
-        default_idx = picker_options.index(ss["selected_acronym"]) if ss["selected_acronym"] in picker_options else 0
-        chosen = st.selectbox("…or pick a region:", picker_options, index=default_idx, key="region_picker")
-        if chosen != ss["selected_acronym"]:
-            ss["selected_acronym"] = chosen
+    table_df = view.copy()
+    if search:
+        s = search.strip().lower()
+        table_df = table_df[
+            table_df["acronym"].astype(str).str.lower().str.contains(s, na=False)
+            | table_df["region_name"].astype(str).str.lower().str.contains(s, na=False)
+        ]
+    if min_abs_lfc > 0:
+        table_df = table_df[table_df["log2_fold_change"].abs() >= min_abs_lfc]
+    if max_p < 1.0:
+        table_df = table_df[table_df["p_value"] <= max_p]
+    if direction == "up":
+        table_df = table_df[table_df["log2_fold_change"] > 0]
+    elif direction == "down":
+        table_df = table_df[table_df["log2_fold_change"] < 0]
+
+    # Sort by uncorrected p so most interesting rows surface to the top.
+    table_df = table_df.sort_values("p_value", na_position="last")
+
+    display_cols = [
+        "acronym", "region_name", "log2_fold_change", "p_value", "p_corrected",
+        "mean_A", "mean_B", "n_A_eff", "n_B_eff", "significant_uncorrected",
+    ]
+    display_cols = [c for c in display_cols if c in table_df.columns]
+    table_show = table_df[display_cols].reset_index(drop=True)
+
+    st.caption(f"{len(table_show):,} of {len(view):,} regions")
+
+    event = st.dataframe(
+        table_show,
+        use_container_width=True,
+        height=520,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="data_viewer",
+        column_config={
+            "acronym":              st.column_config.TextColumn("Acronym", width="small"),
+            "region_name":          st.column_config.TextColumn("Region"),
+            "log2_fold_change":     st.column_config.NumberColumn("log2 FC", format="%+.2f"),
+            "p_value":              st.column_config.NumberColumn("p (uncorr.)", format="%.2g"),
+            "p_corrected":          st.column_config.NumberColumn("p (corr.)", format="%.2g"),
+            "mean_A":               st.column_config.NumberColumn("mean G002", format="%.0f"),
+            "mean_B":               st.column_config.NumberColumn("mean G001", format="%.0f"),
+            "n_A_eff":              st.column_config.NumberColumn("n G002", format="%d"),
+            "n_B_eff":              st.column_config.NumberColumn("n G001", format="%d"),
+            "significant_uncorrected": st.column_config.CheckboxColumn("sig (uncorr.)"),
+        },
+    )
+
+    rows_selected = (event.get("selection", {}) or {}).get("rows", []) if event else []
+    if rows_selected:
+        ss["selected_acronym"] = table_show.iloc[rows_selected[0]]["acronym"]
 
 
 with col_right:
     acronym = ss["selected_acronym"]
     if acronym is None:
-        st.info("Click a dot in the volcano (or use the picker) to drill in.")
+        st.info("Click a row in the data viewer to drill in.")
     else:
         row = _stats_row(acronym)
         if row is None:
@@ -242,11 +233,13 @@ with col_right:
         else:
             st.subheader(f"{row.get('region_name', acronym)} · {acronym}")
 
-            m1, m2, m3, m4 = st.columns(4)
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("log2 FC", f"{row['log2_fold_change']:+.2f}")
-            m2.metric("p (corrected)", f"{row['p_corrected']:.2g}")
-            m3.metric("mean G002 / G001", f"{row.get('mean_A', float('nan')):.0f} / {row.get('mean_B', float('nan')):.0f}")
-            m4.metric("n (G002/G001)", f"{int(row.get('n_A_eff', 0))} / {int(row.get('n_B_eff', 0))}")
+            p_unc = row.get("p_value", float("nan"))
+            m2.metric("p (uncorrected)", f"{p_unc:.2g}" if pd.notna(p_unc) else "—")
+            m3.metric("p (corrected)", f"{row['p_corrected']:.2g}")
+            m4.metric("mean G002 / G001", f"{row.get('mean_A', float('nan')):.0f} / {row.get('mean_B', float('nan')):.0f}")
+            m5.metric("n (G002/G001)", f"{int(row.get('n_A_eff', 0))} / {int(row.get('n_B_eff', 0))}")
 
             st.plotly_chart(strip_figure(quant_long, acronym), use_container_width=True)
 

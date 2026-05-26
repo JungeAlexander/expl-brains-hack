@@ -14,17 +14,22 @@ def _safe_neglog10(p: pd.Series) -> pd.Series:
 
 
 def volcano_figure(stats: pd.DataFrame, max_p: float = 0.05, min_abs_lfc: float = 0.0):
-    """Volcano: log2_fold_change vs -log10(p_corrected). Color by sig + threshold pass.
+    """Volcano: log2_fold_change vs -log10(p_value). Color by uncorrected-p + |lfc| pass.
 
-    A point is highlighted (red/blue) if it passes BOTH the corrected-significance flag and
-    the user thresholds; otherwise gray.
+    Uncorrected p is used on the y-axis because Bonferroni-corrected p values in this
+    dataset are all ≥ 0.43, which would compress every dot into a thin band near y=0.
+    A point is highlighted (red/blue) if its uncorrected p ≤ max_p AND |log2fc| ≥
+    min_abs_lfc; otherwise gray.
+
+    Built with go.Scatter (not px.scatter) so streamlit-plotly-events can JSON-encode
+    customdata reliably — NaN values in customdata via px silently break the render.
     """
     df = stats.copy()
-    df["neg_log10_p"] = _safe_neglog10(df["p_corrected"])
+    df = df.dropna(subset=["log2_fold_change", "p_value"])
+    df["neg_log10_p"] = _safe_neglog10(df["p_value"])
 
     passes = (
-        df["significant_corrected"].fillna(False).astype(bool)
-        & (df["p_corrected"] <= max_p)
+        (df["p_value"] <= max_p)
         & (df["log2_fold_change"].abs() >= min_abs_lfc)
     )
     df["category"] = np.where(
@@ -39,28 +44,44 @@ def volcano_figure(stats: pd.DataFrame, max_p: float = 0.05, min_abs_lfc: float 
         "Down in Semaglutide": "#1f77b4",
     }
 
-    fig = px.scatter(
-        df,
-        x="log2_fold_change",
-        y="neg_log10_p",
-        color="category",
-        color_discrete_map=color_map,
-        hover_data={
-            "acronym": True,
-            "region_name": True,
-            "log2_fold_change": ":.2f",
-            "p_corrected": ":.2g",
-            "category": False,
-            "neg_log10_p": False,
-        },
-        labels={
-            "log2_fold_change": "log2(fold change) — G002 / G001",
-            "neg_log10_p": "−log10(corrected p)",
-            "category": "",
-        },
-        custom_data=["acronym"],
-    )
-    fig.update_traces(marker=dict(size=8, line=dict(width=0.5, color="rgba(0,0,0,0.4)")))
+    # Render-order: n.s. first, then significant on top.
+    cat_order = ["n.s.", "Down in Semaglutide", "Up in Semaglutide"]
+    fig = go.Figure()
+    for cat in cat_order:
+        sub = df[df["category"] == cat]
+        if sub.empty:
+            continue
+        # Build customdata as a 2-D array; replace NaN with "" so the JS bridge
+        # in streamlit-plotly-events doesn't silently drop the trace.
+        p_corr_str = sub["p_corrected"].apply(
+            lambda v: f"{v:.2g}" if pd.notna(v) else "—"
+        )
+        custom = np.stack([
+            sub["acronym"].astype(str).to_numpy(),
+            sub["region_name"].astype(str).to_numpy(),
+            sub["log2_fold_change"].to_numpy(),
+            sub["p_value"].to_numpy(),
+            p_corr_str.to_numpy(),
+        ], axis=1)
+        fig.add_trace(go.Scatter(
+            x=sub["log2_fold_change"],
+            y=sub["neg_log10_p"],
+            mode="markers",
+            name=cat,
+            marker=dict(
+                size=9,
+                color=color_map[cat],
+                line=dict(width=0.5, color="rgba(0,0,0,0.4)"),
+            ),
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b> — %{customdata[1]}<br>"
+                "log2 FC: %{customdata[2]:.2f}<br>"
+                "p (uncorrected): %{customdata[3]:.2g}<br>"
+                "p (corrected): %{customdata[4]}"
+                "<extra></extra>"
+            ),
+        ))
     fig.add_hline(
         y=-np.log10(max_p),
         line_dash="dot",
@@ -76,6 +97,8 @@ def volcano_figure(stats: pd.DataFrame, max_p: float = 0.05, min_abs_lfc: float 
         margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         plot_bgcolor="white",
+        xaxis_title="log2(fold change) — G002 / G001",
+        yaxis_title="−log10(uncorrected p)",
     )
     fig.update_xaxes(zeroline=True, zerolinecolor="lightgray")
     fig.update_yaxes(zeroline=True, zerolinecolor="lightgray")
